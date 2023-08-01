@@ -1,95 +1,181 @@
-import Image from 'next/image'
-import styles from './page.module.css'
+"use client"
 
-export default function Home() {
+import React, { useState, useEffect, useRef } from "react";
+import { Wrapper } from "@googlemaps/react-wrapper";
+import ThreejsOverlayView from "@ubilabs/threejs-overlay-view";
+import { CatmullRomCurve3, Vector3 } from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
+import { Line2 } from "three/examples/jsm/lines/Line2.js";
+import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
+import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
+import { getGeocode, getLatLng } from "use-places-autocomplete";
+
+const mapOptions = {
+  mapId: process.env.NEXT_PUBLIC_MAP_ID,
+  center: {
+    lat: 13.7563309, lng: 100.5017651
+  },
+  zoom: 8,
+  disableDefaultUI: true,
+  heading: 25,
+  tilt: 0,
+};
+
+export default function App() {
   return (
-    <main className={styles.main}>
-      <div className={styles.description}>
-        <p>
-          Get started by editing&nbsp;
-          <code className={styles.code}>app/page.js</code>
-        </p>
-        <div>
-          <a
-            href="https://vercel.com?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            By{' '}
-            <Image
-              src="/vercel.svg"
-              alt="Vercel Logo"
-              className={styles.vercelLogo}
-              width={100}
-              height={24}
-              priority
-            />
-          </a>
-        </div>
-      </div>
+    <Wrapper apiKey={process.env.NEXT_PUBLIC_MAP_API_KEY}>
+      <MyMap />
+    </Wrapper>
+  );
+}
 
-      <div className={styles.center}>
-        <Image
-          className={styles.logo}
-          src="/next.svg"
-          alt="Next.js Logo"
-          width={180}
-          height={37}
-          priority
-        />
-      </div>
+function MyMap() {
+  const [route, setRoute] = useState(null);
+  const [map, setMap] = useState();
+  const ref = useRef();
 
-      <div className={styles.grid}>
-        <a
-          href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className={styles.card}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2>
-            Docs <span>-&gt;</span>
-          </h2>
-          <p>Find in-depth information about Next.js features and API.</p>
-        </a>
+  useEffect(() => {
+    setMap(new window.google.maps.Map(ref.current, mapOptions));
+  }, []);
 
-        <a
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className={styles.card}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2>
-            Learn <span>-&gt;</span>
-          </h2>
-          <p>Learn about Next.js in an interactive course with&nbsp;quizzes!</p>
-        </a>
+  return (
+    <>
+      <div ref={ref} id="map" />
+      {map && <Directions setRoute={setRoute} />}
+      {map && route && <Animate map={map} route={route} />}
+    </>
+  );
+}
 
-        <a
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className={styles.card}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2>
-            Templates <span>-&gt;</span>
-          </h2>
-          <p>Explore the Next.js 13 playground.</p>
-        </a>
+function Directions({ setRoute }) {
+  const [origin] = useState("Bangkok, Thái Lan");
+  const [destination] = useState("Hà Nội, Hoàn Kiếm, Hà Nội, Việt Nam");
 
-        <a
-          href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className={styles.card}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2>
-            Deploy <span>-&gt;</span>
-          </h2>
-          <p>
-            Instantly deploy your Next.js site to a shareable URL with Vercel.
-          </p>
-        </a>
-      </div>
-    </main>
-  )
+  useEffect(() => {
+    fetchDirections(origin, destination, setRoute);
+  }, [origin, destination]);
+
+  return (
+    <div className="directions">
+      <h2>Directions</h2>
+      <h3>Origin</h3>
+      <p>{origin}</p>
+      <h3>Destination</h3>
+      <p>{destination}</p>
+    </div>
+  );
+}
+
+const ANIMATION_MS = 10000;
+const FRONT_VECTOR = new Vector3(0, -1, 0);
+
+function Animate({ route, map }) {
+  const overlayRef = useRef();
+  const trackRef = useRef();
+  const carRef = useRef();
+
+  useEffect(() => {
+    map.setCenter(route[Math.floor(route.length / 2)], 8);
+
+    if (!overlayRef.current) {
+      overlayRef.current = new ThreejsOverlayView(mapOptions.center);
+      overlayRef.current.setMap(map);
+    }
+
+    const scene = overlayRef.current.getScene();
+    const points = route.map((p) => overlayRef.current.latLngAltToVector3(p));
+    const curve = new CatmullRomCurve3(points);
+
+    if (trackRef.current) {
+      scene.remove(trackRef.current);
+    }
+    trackRef.current = createTrackFromCurve(curve);
+    scene.add(trackRef.current);
+
+    loadModel().then((model) => {
+      if (carRef.current) {
+        scene.remove(carRef.current);
+      }
+      carRef.current = model;
+      scene.add(carRef.current);
+    });
+
+    overlayRef.current.update = () => {
+      trackRef.current.material.resolution.copy(
+        overlayRef.current.getViewportSize()
+      );
+
+      if (carRef.current) {
+        const progress = (performance.now() % ANIMATION_MS) / ANIMATION_MS;
+        curve.getPointAt(progress, carRef.current.position);
+        carRef.current.quaternion.setFromUnitVectors(
+          FRONT_VECTOR,
+          curve.getTangentAt(progress)
+        );
+        carRef.current.rotateX(Math.PI / 2);
+      }
+
+      overlayRef.current.requestRedraw();
+    };
+
+    return () => {
+      scene.remove(trackRef.current);
+      scene.remove(carRef.current);
+    };
+  }, [route]);
+}
+
+function createTrackFromCurve(curve) {
+  const points = curve.getSpacedPoints(curve.points.length * 10);
+  const positions = points.map((point) => point.toArray()).flat();
+
+  return new Line2(
+    new LineGeometry().setPositions(positions),
+    new LineMaterial({
+      color: 0xffb703,
+      linewidth: 8,
+    })
+  );
+}
+
+async function loadModel() {
+  const loader = new GLTFLoader();
+  // This work is based on "Low poly Car" (https://sketchfab.com/3d-models/low-poly-car-f822f0c500a24ca9ac2af183d2e630b4) by reyad.bader (https://sketchfab.com/reyad.bader) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+  const object = await loader.loadAsync("/low_poly_car/scene.gltf");
+  const group = object.scene;
+  group.scale.setScalar(300);
+
+  return group;
+}
+
+async function fetchDirections(origin, destination, setRoute) {
+  const [originResults, destinationResults] = await Promise.all([
+    getGeocode({ address: origin }),
+    getGeocode({ address: destination }),
+  ]);
+
+  const [originLocation, destinationLocation] = await Promise.all([
+    getLatLng(originResults[0]),
+    getLatLng(destinationResults[0]),
+  ]);
+
+  console.log(originLocation, destinationLocation);
+
+  const service = new google.maps.DirectionsService();
+  service.route(
+    {
+      origin: originLocation,
+      destination: destinationLocation,
+      travelMode: google.maps.TravelMode.DRIVING,
+    },
+    (result, status) => {
+      if (status === "OK" && result) {
+        const route = result.routes[0].overview_path.map((path) => ({
+          lat: path.lat(),
+          lng: path.lng(),
+        }));
+        setRoute(route);
+      }
+    }
+  );
 }
